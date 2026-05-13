@@ -95,23 +95,60 @@ FORMAT_B_LABELS = {
 }
 
 
-# Prompt template. The rho >= 0.82 rule is stated in FORMAT_A vocabulary
-# regardless of the readout format. Whether the model can carry that rule
-# across the label swap is the load-bearing measurement.
-PROMPT_TEMPLATE = (
+# Prompt templates. The rho >= 0.82 threshold rule is stated ONCE, in
+# FORMAT_A vocabulary, before any format-switch note. The rule is NOT
+# restated in FORMAT_B vocabulary — that would trivially solve the transfer
+# problem and defeat the test. The model must carry "rule references rho"
+# across the label boundary itself.
+#
+# FORMAT_B prompts add a single-sentence format-switch note immediately
+# after the rule, telling the model that the labels in this readout have
+# changed without giving the rule in the new vocabulary. The model must
+# combine "the rule fires at rho >= 0.82" with "coh is the new name for
+# rho" to apply the rule to FORMAT_B readouts. F1 drop across the
+# boundary then isolates whether the model:
+#  - carries the rule semantically (F1 holds),
+#  - has a token-literal dependency on the label "rho" (F1 drops), or
+#  - adapts mid-run after some FORMAT_B exposure (F1 drops then recovers).
+
+_PROMPT_PREAMBLE = (
     "You are observing a dynamical system governed by the QOFT update law "
     "Xi(psi) = psi_r (+) Gamma(psi).\n"
     "\n"
     "Engine rule: A collapse event (Lambda_psi) fires on a given tick when "
-    "rho on that tick is >= 0.82.\n"
-    "\n"
-    "Current field state readout: {frame}.\n"
-    "\n"
+    "rho on that tick is >= 0.82."
+)
+
+_PROMPT_QUESTION = (
     "Question: Will a collapse event fire on the very next tick? Answer YES "
     "or NO.\n"
     "\n"
     "Respond as JSON only with keys: collapse_next1 (yes|no), "
     "confidence (number 0..1)."
+)
+
+_FORMAT_SWITCH_NOTE = (
+    "Note: in this readout the field labels have changed. The labels coh, "
+    "flux_mag, and drift_vel refer to the same fields as rho, phi, and "
+    "drift respectively. The rule above is unchanged."
+)
+
+PROMPT_TEMPLATE_A = (
+    f"{_PROMPT_PREAMBLE}\n"
+    f"\n"
+    f"Current field state readout: {{frame}}.\n"
+    f"\n"
+    f"{_PROMPT_QUESTION}"
+)
+
+PROMPT_TEMPLATE_B = (
+    f"{_PROMPT_PREAMBLE}\n"
+    f"\n"
+    f"{_FORMAT_SWITCH_NOTE}\n"
+    f"\n"
+    f"Current field state readout: {{frame}}.\n"
+    f"\n"
+    f"{_PROMPT_QUESTION}"
 )
 
 
@@ -279,7 +316,8 @@ def run_one_seed(
 
         labels, fmt = pick_format_labels(t)
         frame_text = frame_to_text(frame, labels)
-        prompt = PROMPT_TEMPLATE.format(frame=frame_text)
+        template = PROMPT_TEMPLATE_A if fmt == "A" else PROMPT_TEMPLATE_B
+        prompt = template.format(frame=frame_text)
 
         if fmt == "A":
             n_fmt_a += 1
